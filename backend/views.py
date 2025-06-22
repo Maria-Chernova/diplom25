@@ -19,22 +19,20 @@ from backend.models import Shop, Category, Product, ProductInfo, Parameter, Prod
     Contact, ConfirmEmailToken
 from backend.serializers import UserSerializer, CategorySerializer, ShopSerializer, ProductInfoSerializer, \
     OrderItemSerializer, OrderSerializer, ContactSerializer
-from backend.signals import new_user_registered, new_order
 
-
+from backend.tasks import send_order_update_email
+from backend.tasks import send_confirmation_email
 class RegisterAccount(APIView):
     """
     Для регистрации покупателей
     """
     # Регистрация методом POST
     def post(self, request, *args, **kwargs):
-
         # проверяем обязательные аргументы
         if {'first_name', 'last_name', 'email', 'password', 'company', 'position'}.issubset(request.data):
             errors = {}
 
             # проверяем пароль на сложность
-
             try:
                 validate_password(request.data['password'])
             except Exception as password_error:
@@ -44,7 +42,7 @@ class RegisterAccount(APIView):
                     error_array.append(item)
                 return JsonResponse({'Status': False, 'Errors': {'password': error_array}})
             else:
-                # проверяем данные для уникальности имени пользователя
+
                 request.data._mutable = True
                 request.data.update({})
                 user_serializer = UserSerializer(data=request.data)
@@ -53,13 +51,13 @@ class RegisterAccount(APIView):
                     user = user_serializer.save()
                     user.set_password(request.data['password'])
                     user.save()
-                    new_user_registered.send(sender=self.__class__, user_id=user.id)
+
+                    send_confirmation_email.delay(user.id)
                     return JsonResponse({'Status': True})
                 else:
                     return JsonResponse({'Status': False, 'Errors': user_serializer.errors})
 
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
-
 
 class ConfirmAccount(APIView):
     """
@@ -101,11 +99,11 @@ class AccountDetails(APIView):
     def post(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return JsonResponse({'Status': False, 'Error': 'Log in required'}, status=403)
-        # проверяем обязательные аргументы
+
 
         if 'password' in request.data:
             errors = {}
-            # проверяем пароль на сложность
+
             try:
                 validate_password(request.data['password'])
             except Exception as password_error:
@@ -117,7 +115,7 @@ class AccountDetails(APIView):
             else:
                 request.user.set_password(request.data['password'])
 
-        # проверяем остальные данные
+
         user_serializer = UserSerializer(request.user, data=request.data, partial=True)
         if user_serializer.is_valid():
             user_serializer.save()
@@ -179,7 +177,7 @@ class ProductInfoView(APIView):
         if category_id:
             query = query & Q(product__category_id=category_id)
 
-        # фильтруем и отбрасываем дуликаты
+
         queryset = ProductInfo.objects.filter(
             query).select_related(
             'shop', 'product__category').prefetch_related(
@@ -464,7 +462,7 @@ class ContactView(APIView):
 
 class OrderView(APIView):
     """
-    Класс для получения и размешения заказов пользователями
+    Класс для получения и размещения заказов пользователями
     """
 
     # получить мои заказы
@@ -497,7 +495,8 @@ class OrderView(APIView):
                     return JsonResponse({'Status': False, 'Errors': 'Неправильно указаны аргументы'})
                 else:
                     if is_updated:
-                        new_order.send(sender=self.__class__, user_id=request.user.id)
+
+                        send_order_update_email.delay(request.user.id)
                         return JsonResponse({'Status': True})
 
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
